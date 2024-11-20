@@ -29,7 +29,28 @@ $xaml.SelectNodes("//*[@*[contains(translate(name(.),'n','N'),'Name')]]")  | For
     Write-Host "Variable named: Name $($_.Name)"
 }
 
+
+function AppLog {
+    [CmdletBinding(SupportsShouldProcess)]
+    param (
+        [Parameter(Mandatory=$True,Position=0)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Message,
+        [Parameter(Mandatory=$False)]
+        [string]$Color = "Black"  # Default color is Black
+    )
+
+    # Add the log message to the LogsTextBox
+    $LogsTextBox.Dispatcher.Invoke({
+        $run = New-Object Windows.Documents.Run $Message
+        $run.Foreground = [System.Windows.Media.Brushes]::$Color
+        $LogsTextBox.AppendText("$Message`n")
+        $LogsTextBox.ScrollToEnd()
+    })
+}
+
 function Invoke-PopulateContainersList {
+    AppLog "Calling Invoke-PopulateContainersList" -Color Red
     $containers = $containers = Get-DockerContainersData
     $ContainersListBox.ItemsSource = $null
     $ContainersListBox.ItemsSource = $containers
@@ -37,9 +58,16 @@ function Invoke-PopulateContainersList {
 }
 
 function Invoke-PopulateStacksList {
+    AppLog "Calling Invoke-PopulateStacksList"
     $stacks = List-PortainerStacks | Select Name, Status, UpdateDate | Convert-PortainerStacks
     $StacksListBox.ItemsSource = $null
     $StacksListBox.ItemsSource = $stacks
+}
+
+function Invoke-RefreshUiLists {
+    AppLog "Calling Invoke-RefreshUiLists"
+    Invoke-PopulateStacksList
+    Invoke-PopulateContainersList
 }
 
 function Invoke-StartContainerBtn{
@@ -71,11 +99,21 @@ function Invoke-ShowDetailsContainerBtn{
     }
 }
 
+function Invoke-RestartDockerButton{
+    $SshExe = (Get-Command 'ssh.exe').Source
+    &"$SshExe" 'miniautoroot' 'systemctl restart snap.docker.dockerd.service'
+}
+
+function Invoke-UpdateAllButton{
+    Invoke-RefreshUiLists
+}
+
+
 $StacksListBox.add_SelectionChanged({
     $selectedStack = $StacksListBox.SelectedItem
     if ($null -ne $selectedStack) {
-        Write-Host "Selected Stack:" -ForegroundColor Green
-        Write-Host $selectedStack
+        AppLog "Selected Stack:" -Color Green
+        AppLog $selectedStack
     }
 })
 
@@ -83,8 +121,8 @@ $StacksListBox.add_SelectionChanged({
 $ContainersListBox.add_SelectionChanged({
     $selectedContainer = $ContainersListBox.SelectedItem
     if ($null -ne $selectedContainer) {
-        Write-Host "Selected Container:" -ForegroundColor Green
-        Write-Host $selectedContainer
+        AppLog "Selected Container:" -Color Green
+        AppLog $selectedContainer
     }
 })
 
@@ -96,11 +134,11 @@ $StopStackButton.Add_Click({
     $selectedStack = $StacksListBox.SelectedItem
     if ($null -ne $selectedStack) {
         $sname = $($selectedStack.Name)
-        Write-Host "Restarting Stack: $($selectedStack.Name)" -ForegroundColor Cyan
+        AppLog "Restarting Stack: $($selectedStack.Name)" -Color Cyan
          List-PortainerStacks | Where Name -match $sname | Stop-PortainerStack
          Invoke-PopulateStacksList
     } else {
-        Write-Host "No stack selected!" -ForegroundColor Yellow
+        AppLog "No stack selected!" -Color Yellow
     }
 })
 
@@ -109,43 +147,40 @@ $RestartStackButton.Add_Click({
     $selectedStack = $StacksListBox.SelectedItem
     if ($null -ne $selectedStack) {
         $sname = $($selectedStack.Name)
-        Write-Host "Restarting Stack: $($selectedStack.Name)" -ForegroundColor Cyan
+        AppLog "Restarting Stack: $($selectedStack.Name)" -Color Cyan
          List-PortainerStacks | Where Name -match $sname | Stop-PortainerStack
          Start-Sleep 1
          List-PortainerStacks | Where Name -match $sname | Start-PortainerStack
          Invoke-PopulateStacksList
     } else {
-        Write-Host "No stack selected!" -ForegroundColor Yellow
+        AppLog "No stack selected!" -Color Yellow
     }
 })
 # Start Stack
 $StartStackButton.Add_Click({
     $selectedStack = $StacksListBox.SelectedItem
     if ($null -ne $selectedStack) {
-        Write-Host "Starting Stack: $($selectedStack.Name)" -ForegroundColor Green
+        AppLog "Starting Stack: $($selectedStack.Name)" -Color Green
         $sname = $($selectedStack.Name)
-        Write-Host "Restarting Stack: $($selectedStack.Name)" -ForegroundColor Cyan
+        AppLog "Restarting Stack: $($selectedStack.Name)" -Color Cyan
          List-PortainerStacks | Where Name -match $sname | Start-PortainerStack
     } else {
-        Write-Host "No stack selected!" -ForegroundColor Yellow
+        AppLog "No stack selected!" -Color Yellow
     }
 })
-
+$RestartDockerButton = $Window.FindName("RestartDockerButton")
 $CloseButton = $Window.FindName("CloseButton")
-
+$UpdateAllButton = $Window.FindName("UpdateAllButton")
 # Button Click Handlers
 $StartContainerButton.Add_Click({Invoke-StartContainerBtn})
 
+$RestartDockerButton.Add_Click({Invoke-RestartDockerButton})
+$UpdateAllButton.Add_Click({Invoke-UpdateAllButton})
 
 $StopContainerButton.Add_Click({Invoke-StopContainerBtn})
 $DetailsContainerButton.Add_Click({Invoke-ShowDetailsContainerBtn})
   
 $CloseButton.Add_Click({ $Window.Close() })
-Invoke-PopulateStacksList
-Invoke-PopulateContainersList
+Invoke-RefreshUiLists
 $Window.ShowDialog() | Out-Null
-
-
-
-
 
