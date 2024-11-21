@@ -4,7 +4,7 @@ Param()
 
 [string]$XAMLPath = "$PSScriptRoot\MainWindow.xaml"
 [bool]$UseEmbeddedXaml = $True
-
+[string]$Script:SelectedContainerName = ""
 [void][System.Reflection.Assembly]::LoadWithPartialName('PresentationFramework')
 [void][System.Reflection.Assembly]::LoadWithPartialName('PresentationCore')
 [void][System.Reflection.Assembly]::LoadWithPartialName('WindowsBase')
@@ -37,6 +37,116 @@ $Window=[Windows.Markup.XamlReader]::Load( $reader )
 $xaml.SelectNodes("//*[@*[contains(translate(name(.),'n','N'),'Name')]]")  | ForEach-Object {  
     New-Variable  -Name $_.Name -Value $Window.FindName($_.Name) -Force -Scope Global
     Write-Verbose "Variable named: Name $($_.Name)"
+}
+
+
+
+function Show-ObjectTree {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true, Position = 0)]
+        [Object]$RootObject,
+        [Parameter(Mandatory = $False)]
+        [string]$RootObjectName = "Root"
+    )
+
+    # Recursive helper function to add object nodes to the TreeView
+    function Add-Node {
+        param (
+            [System.Windows.Forms.TreeNode]$ParentNode,
+            [string]$Key,
+            [Object]$Value
+        )
+
+        if($Value -eq $Null){
+            $node = New-Object System.Windows.Forms.TreeNode
+            $node.Text = "$Key`: NULL"
+            [void]$ParentNode.Nodes.Add($node)
+            return
+        }
+        $type = $Value.GetType()
+
+        if ($Value -is [PSCustomObject]) {
+            # Handle PSCustomObject (key-value pairs)
+            $node = New-Object System.Windows.Forms.TreeNode
+            $node.Text = "$Key`: (Object)"
+            [void]$ParentNode.Nodes.Add($node)
+
+            $Value.PSObject.Properties | ForEach-Object {
+                Add-Node $node $_.Name $_.Value
+            }
+        }
+        elseif ($Value -is [Hashtable]) {
+            # Handle Hashtable (key-value pairs)
+            $node = New-Object System.Windows.Forms.TreeNode
+            $node.Text = "$Key`: (Hashtable)"
+            [void]$ParentNode.Nodes.Add($node)
+
+            $Value.GetEnumerator() | ForEach-Object {
+                Add-Node $node $_.Key $_.Value
+            }
+        }
+        elseif ($Value -is [System.Collections.ArrayList] -or $Value -is [Array]) {
+            # Handle arrays and ArrayLists
+            $node = New-Object System.Windows.Forms.TreeNode
+            $node.Text = "$Key`: (Array)"
+            [void]$ParentNode.Nodes.Add($node)
+
+            for ($i = 0; $i -lt $Value.Count; $i++) {
+                Add-Node $node "[$i]" $Value[$i]
+            }
+        }
+        else {
+            # Handle primitive values
+            $node = New-Object System.Windows.Forms.TreeNode
+            $node.Text = "$Key`: $Value [$type]"
+            [void]$ParentNode.Nodes.Add($node)
+        }
+    }
+
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+
+    $Form = New-Object System.Windows.Forms.Form
+    $Form.Text = "docker inspect $RootObjectName"
+    $Form.Size = New-Object System.Drawing.Size(600, 600)
+
+    $TreeView = New-Object System.Windows.Forms.TreeView
+    $TreeView.Location = New-Object System.Drawing.Point(10, 10)
+    $TreeView.Size = New-Object System.Drawing.Size(580, 550)
+    $Form.Controls.Add($TreeView)
+
+    # Create the root node
+    $rootNode = New-Object System.Windows.Forms.TreeNode
+    $rootNode.Text = "$RootObjectName"
+    [void]$TreeView.Nodes.Add($rootNode)
+
+    # Add the object structure to the TreeView
+    if ($RootObject -is [PSCustomObject]) {
+        $RootObject.PSObject.Properties | ForEach-Object {
+            Add-Node $rootNode $_.Name $_.Value
+        }
+    }
+    elseif ($RootObject -is [Hashtable]) {
+        $RootObject.GetEnumerator() | ForEach-Object {
+            Add-Node $rootNode $_.Key $_.Value
+        }
+    }
+    elseif ($RootObject -is [System.Collections.ArrayList] -or $RootObject -is [Array]) {
+        for ($i = 0; $i -lt $RootObject.Count; $i++) {
+            Add-Node $rootNode "[$i]" $RootObject[$i]
+        }
+    }
+    else {
+        Add-Node $rootNode "Value" $RootObject
+    }
+
+    $rootNode.Expand()
+
+    $Form.Add_Shown({$Form.Activate()})
+    [void]$Form.ShowDialog()
+
+    $Form.Dispose()
 }
 
 
@@ -105,7 +215,14 @@ function Invoke-ShowDetailsContainerBtn{
     $selectedContainer = $ContainersListBox.SelectedItem
     if ($null -ne $selectedContainer) {
         $name = ($selectedContainer -split '\s+')[0]
-        Start-Process "docker inspect $name"
+        $ContainerName = $name[0]
+        $SshExe = (Get-Command 'ssh.exe').Source
+        $TmpDockerLogFile = "$ENV:Temp\docker.json"
+        Write-Host "docker inspect $Script:SelectedContainerName"
+        &"$SshExe" 'mini' 'docker' 'inspect' "$Script:SelectedContainerName" > "$TmpDockerLogFile"
+        Write-Host "Writing to `"$TmpDockerLogFile`""
+        $JsonData = Get-Content -Path "$TmpDockerLogFile" | ConvertFrom-Json
+        Show-ObjectTree $JsonData -RootObjectName $SelectedContainerName
     }
 }
 
@@ -131,7 +248,8 @@ $StacksListBox.add_SelectionChanged({
 $ContainersListBox.add_SelectionChanged({
     $selectedContainer = $ContainersListBox.SelectedItem
     if ($null -ne $selectedContainer) {
-        Write-AppLog "Selected Container:" -Color Green
+        $Script:SelectedContainerName = $selectedContainer.Name 
+        Write-AppLog "Selected Container: $CntName $CntName2" -Color Green
         Write-AppLog $selectedContainer
     }
 })
