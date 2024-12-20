@@ -29,7 +29,7 @@ Param()
 # Script Variables
 # ==================================================================
 
-[string]$Script:XAMLPath                = "$PSScriptRoot\MainWindow.xaml"
+[string]$Script:XAMLPath                = "$PSScriptRoot\xaml\MainWindow.xaml"
 [bool]$Script:UseEmbeddedXaml           = $True
 [string]$Script:SelectedContainerName   = ""
 [string]$Script:SelectedStackName       = ""
@@ -57,10 +57,13 @@ function Initialize-ProgressWndScript{
 
 $Script = Initialize-ProgressWndScript
 Invoke-Expression $Script
+
 #[string]$ProgressWndScript = (Resolve-Path "$PSScriptRoot\ProgressWnd.ps1").Path
 #. "$ProgressWndScript"
 
 Initialize-ProgressDialog
+
+$Script:ProgressDialogId = Show-ProgressDialogAsync "Launching DockerMgr..." -Verbose
 
 # ==================================================================
 # Create the [xml] object from the xaml definition file.
@@ -209,6 +212,35 @@ function Show-ObjectTree {
     $Form.Dispose()
 }
 
+function Write-ErrorLog {
+    [CmdletBinding(SupportsShouldProcess)]
+    param (
+        [Parameter(Mandatory=$True,Position=0)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Message,
+        [Parameter(Mandatory=$False)]
+        [string]$Color = "Red"  # Default color is Black
+    )
+
+    if($LogsTextBox -eq $Null){
+        Write-Host "[DockerMgr] " -f DarkCyan -NoNewLine
+        $currentBackground = $Host.UI.RawUI.BackgroundColor
+        $currentColor = $Host.UI.RawUI.ForegroundColor
+        if($Color -eq $currentBackground){
+            Write-Host "[Error] $Message" -f $currentColor
+        }else{
+            Write-Host "[Error] $Message" -f $Color
+        }
+    }else{
+        # Add the log message to the LogsTextBox
+        $LogsTextBox.Dispatcher.Invoke({
+            $run = New-Object Windows.Documents.Run $Message
+            $run.Foreground = [System.Windows.Media.Brushes]::$Color
+            $LogsTextBox.AppendText("$Message`n")
+            $LogsTextBox.ScrollToEnd()
+        })
+    }
+}
 
 function Write-AppLog {
     [CmdletBinding(SupportsShouldProcess)]
@@ -240,24 +272,136 @@ function Write-AppLog {
     }
 }
 
-function Invoke-PopulateContainersList {
-    Write-AppLog "Calling Invoke-PopulateContainersList" -Color Red
-    $containers = $containers = Get-DockerContainersData
-    $ContainersListBox.ItemsSource = $null
-    $ContainersListBox.ItemsSource = $containers
-    
+function Write-LogSelectedObject {
+    [CmdletBinding(SupportsShouldProcess)]
+    param (
+        [Parameter(Mandatory=$True,Position=0)]
+        [ValidateNotNullOrEmpty()]
+        [PsObject]$Obj,
+        [Parameter(Mandatory=$False)]
+        [alias('s')]
+        [switch]$Stack,
+        [Parameter(Mandatory=$False)]
+        [alias('c')]
+        [switch]$Container
+    )
+
+    $Type = 'unknown'
+    if($Stack){
+        $Type = 'Stack'
+    }elseif($Container){
+        $Type = 'Container'
+    }
+    $Strlog = 'selected {0} item "' -f $Type
+    if($Obj.Name){
+        $Strlog += $Obj.Name
+    }
+
+    if($Obj.Status){
+        $Strlog += '/'
+        $Strlog += $Obj.Status
+
+    }
+
+    if($Obj.UpdateDate){
+        $Strlog += '/'
+        $Strlog += $Obj.UpdateDate
+    }
+    $Strlog += '"'
+    Write-AppLog $Strlog -Color Cyan
 }
 
+
+function Test-MiniPorts {
+    [CmdletBinding(SupportsShouldProcess)]
+    param (
+        [Parameter(Mandatory=$false) ]
+        [string]$ServerAddress='mini',
+        [Parameter(Mandatory=$false, Position = 1, HelpMessage="The ports") ]
+        [int[]]$Ports = @(8000, 9000, 9443),
+        [Parameter(Mandatory=$false, HelpMessage="Timeout in milliseconds") ]
+        [int]$Timeout = 100 # im on the LAN
+    )
+
+    try{
+
+        $jobs = @()
+
+
+        foreach ($port in $Ports) {
+            $jobs += Start-Job -ScriptBlock {
+                param ($server, $port, $timeout)
+                try {
+                    $tcpClient = [System.Net.Sockets.TcpClient]::new()
+                    $connectTask = $tcpClient.ConnectAsync($server, $port)
+                    $completed = $connectTask.Wait($timeout)
+
+                    if ($completed -and $tcpClient.Connected) {
+                        $tcpClient.Close()
+                        return $true
+                    } else {
+                        return $false
+                    }
+                } catch {
+                    return $false
+                }
+            } -ArgumentList $ServerAddress, $port, $Timeout
+        }
+        $ErrorOccured = $False
+
+        try{
+            $jobs | ForEach-Object { $OutJob = Wait-Job -Job $_ }
+        }catch{
+            $ErrorOccured = $True
+        }
+
+        $portCheckResults = $jobs | ForEach-Object {
+            $result = Receive-Job -Job $_
+            Remove-Job -Job $_
+            $result
+        }
+        if($ErrorOccured){ return $False }
+
+        return ($portCheckResults -notcontains $false)
+    }catch{
+        Show-ExceptionDetails $_
+    }
+}
+
+function Invoke-PopulateContainersList {
+    #try{
+        $ContainersListBox.Clear()
+        Write-AppLog "Calling Invoke-PopulateContainersList" -Color Red
+        $containers = Get-DockerContainersData
+        $ContainersListBox.ItemsSource = $null
+        $ContainersListBox.ItemsSource = $containers
+        
+   # }catch{
+      #  Write-AppLog "$_"    
+    #}
+}
+
+
 function Invoke-PopulateStacksList {
-    Write-AppLog "Calling Invoke-PopulateStacksList"
-    $stacks = List-PortainerStacks | Select Name, Status, UpdateDate | Convert-PortainerStacks
-    $StacksListBox.ItemsSource = $null
-    $StacksListBox.ItemsSource = $stacks
+    $type = $StacksListBox.GetType()
+    $StacksListBox.Clear()
+    Write-AppLog "$type Calling Invoke-PopulateStacksList"
+    #try{
+        $stacks = List-PortainerStacks | Select Name, Status, UpdateDate | Convert-PortainerStacks
+        $StacksListBox.ItemsSource = $null
+        $StacksListBox.ItemsSource = $stacks
+   # }catch{
+        Write-AppLog "$_"    
+    #}
 }
 
 function Invoke-RefreshUiLists {
-    Write-AppLog "Calling Invoke-RefreshUiLists"
+    if(!Test-MiniPorts){
+        Write-ErrorLog "Test-MiniPorts Failed"    
+    }
+    Write-AppLog "Populate Stacks List..."
     Invoke-PopulateStacksList
+    Write-AppLog "Populate Containers List..." -Color Blue
     Invoke-PopulateContainersList
 }
 
@@ -300,6 +444,28 @@ function Invoke-ShowDetailsContainerBtn{
     }
 }
 
+
+function Invoke-GetDataJson{
+    $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
+    $session.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    $session.Cookies.Add((New-Object System.Net.Cookie("ph_phc_hnhlqe6D2Q4IcQNrFItaqdXJAxQ8RcHkPAFAp74pubv_posthog", "%7B%22distinct_id%22%3A%229d803c6b-406e-44cf-a7e2-45db5c7278a4%22%2C%22%24sesid%22%3A%5B1734114697197%2C%220193c141-eb66-7fb2-b311-b0c2f8bcd428%22%2C1734114143078%5D%2C%22%24epp%22%3Atrue%7D", "/", "mini")))
+    $session.Cookies.Add((New-Object System.Net.Cookie("_gorilla_csrf", "MTczNDY0NDk5NHxJa3htYW5GMlRFdDZOazFaZVV4VVNVSnBaMjV2WWpSNlNEWjRORWt4YjFKd2JIWlNXVlZVU21SNVZGRTlJZ289fNVdqIqxAWDl_mZmKBbn_SaxCK23qZqRMnfkzUzjueUB", "/", "mini")))
+    $session.Cookies.Add((New-Object System.Net.Cookie("portainer_api_key", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MSwidXNlcm5hbWUiOiJhZG1pbiIsInJvbGUiOjEsInNjb3BlIjoiZGVmYXVsdCIsImZvcmNlQ2hhbmdlUGFzc3dvcmQiOmZhbHNlLCJleHAiOjE3NjU3NDkwMDMsImp0aSI6ImYwNmM1ZWQwLTQwNmEtNDJlMS05YmFjLTUyYzY4Y2QzNDVlNyIsImlhdCI6MTczNDY0NTAwM30.SkjsIfDRZvl8S39kojnW1Nkv8CbyuoipNRgvsNjqgKs", "/", "mini")))
+    $u = "https://mini:9443/api/endpoints/2"
+    $hdrz = @{
+      "Accept"="application/json, text/plain, */*"
+      "Accept-Encoding"="gzip, deflate, br, zstd"
+      "Referer"="https://mini:9443/"
+    }
+    $res = Invoke-WebRequest -UseBasicParsing -Uri $u -Headers $hdrz -WebSession $session -SkipCertificateCheck
+
+    if($res.StatusCode -ne 200){
+      throw "invalid"
+    }
+     $JsonData = $res.Content  | ConvertFrom-Json
+    Show-ObjectTree $JsonData
+}
+
 function Invoke-RestartDockerButton{
 
     $SshExe = (Get-Command 'ssh.exe').Source
@@ -315,7 +481,9 @@ function Invoke-RestartDockerButton{
 }
 
 function Invoke-UpdateAllButton{
+    Write-AppLog "Invoke-RefreshUiLists" -Color Yellow
     Invoke-RefreshUiLists
+    Write-AppLog "Done"
 }
 
 
@@ -324,7 +492,7 @@ $StacksListBox.add_SelectionChanged({
     if ($null -ne $selectedStack) {
         $Script:SelectedStackName = $selectedStack.Name 
         Write-AppLog "Selected Stack`: $Script:SelectedStackName" -Color Green
-        Write-AppLog $selectedStack
+        Write-LogSelectedObject $selectedStack
     }
 })
 
@@ -334,7 +502,7 @@ $ContainersListBox.add_SelectionChanged({
     if ($null -ne $selectedContainer) {
         $Script:SelectedContainerName = $selectedContainer.Name 
         Write-AppLog "Selected Container`: $Script:SelectedContainerName" -Color Green
-        Write-AppLog $selectedContainer
+        Write-LogSelectedObject $selectedContainer
     }
 })
 
@@ -386,6 +554,8 @@ $StartStackButton.Add_Click({
         Write-AppLog "No stack selected!" -Color Yellow
     }
 })
+
+
 $RestartDockerButton = $Script:WndApp.FindName("RestartDockerButton")
 $CloseButton = $Script:WndApp.FindName("CloseButton")
 $UpdateAllButton = $Script:WndApp.FindName("UpdateAllButton")
@@ -399,6 +569,23 @@ $StopContainerButton.Add_Click({Invoke-StopContainerBtn})
 $DetailsContainerButton.Add_Click({Invoke-ShowDetailsContainerBtn})
   
 $CloseButton.Add_Click({ $Script:WndApp.Close() })
-Invoke-RefreshUiLists
+
+$stacks1 = List-PortainerStacks | Select Name, Status, UpdateDate | Convert-PortainerStacks
+$StacksListBox.ItemsSource = $null
+$StacksListBox.ItemsSource = $stacks1
+
+$ContainersListBox.Clear()
+Write-AppLog "Calling Invoke-PopulateContainersList" -Color Red
+$containers1 = Get-DockerContainersData
+$ContainersListBox.ItemsSource = $null
+$ContainersListBox.ItemsSource = $containers1
+
+Close-ProgressDialogAsync $Script:ProgressDialogId
+
+#Invoke-GetDataJson
+
+
 $Script:WndApp.ShowDialog() | Out-Null
+
+
 

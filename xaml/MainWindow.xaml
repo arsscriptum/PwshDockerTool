@@ -1,7 +1,7 @@
 ﻿<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Portainer and Docker Manager"
-        Height="640" Width="900" WindowStartupLocation="CenterScreen" ResizeMode="NoResize" WindowStyle="SingleBorderWindow">
+        Height="640" Width="900" WindowStartupLocation="CenterScreen" ResizeMode="NoResize" WindowStyle="SingleBorderWindow" ShowInTaskbar = "True" Background = "gray">
     <Grid RenderTransformOrigin="0.5,0.5" Margin="0,0,0,36">
         <!-- Define Layout with Rows and Columns -->
         <Grid.RowDefinitions>
